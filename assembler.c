@@ -1,36 +1,110 @@
-/**
- * Project 1
- * Assembler code fragment for LC-2K
- */
-
 #include <stdbool.h>
 #include <stdlib.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
 
-//Every LC2K file will contain less than 1000 lines of assembly.
 #define MAXLINELENGTH 1000
+#define MAXLABEL 64
 
 int readAndParse(FILE *, char *, char *, char *, char *, char *);
 static void checkForBlankLinesInCode(FILE *inFilePtr);
 static inline int isNumber(char *);
 static inline void printHexToFile(FILE *, int);
 static int endsWith(char *, char *);
-int labelCount = 0;
-struct labelTable {
-        char lab[8];
-        int address;
-    };
-struct labelTable LT[MAXLINELENGTH];
 
-int findLabelAddress(char *labelName) {
+struct labelTable {
+    char lab[MAXLABEL];
+    char section;
+    int offset;
+};
+struct labelTable LT[MAXLINELENGTH];
+int labelCount = 0;
+
+struct symbolEntry {
+    char lab[MAXLABEL];
+    char section;
+    int offset;
+};
+struct symbolEntry symbols[MAXLINELENGTH];
+int symbolCount = 0;
+
+struct relocEntry {
+    int offset;
+    char opcode[16];
+    char lab[MAXLABEL];
+};
+struct relocEntry relocs[MAXLINELENGTH];
+int relocCount = 0;
+
+int textWords[MAXLINELENGTH];
+int dataWords[MAXLINELENGTH];
+int textCount = 0;
+int dataCount = 0;
+
+static int isGlobal(char *label) {
+    return label[0] >= 'A' && label[0] <= 'Z';
+}
+
+static int findLabel(char *labelName) {
     for (int i = 0; i < labelCount; i++) {
         if (!strcmp(LT[i].lab, labelName)) {
-            return LT[i].address;
+            return i;
         }
     }
-    exit(1);   // Not found
+    return -1;
+}
+
+static void addUndefinedSymbol(char *labelName) {
+    for (int i = 0; i < symbolCount; i++) {
+        if (!strcmp(symbols[i].lab, labelName)) {
+            return;
+        }
+    }
+    strcpy(symbols[symbolCount].lab, labelName);
+    symbols[symbolCount].section = 'U';
+    symbols[symbolCount].offset = 0;
+    symbolCount += 1;
+}
+
+static int resolveLabel(char *labelName, int allowUndefined) {
+    int idx = findLabel(labelName);
+    if (idx < 0) {
+        if (!allowUndefined || !isGlobal(labelName)) {
+            exit(1);
+        }
+        addUndefinedSymbol(labelName);
+        return 0;
+    }
+    if (LT[idx].section == 'T') {
+        return LT[idx].offset;
+    }
+    return textCount + LT[idx].offset;
+}
+
+static void addReloc(int offset, char *opcode, char *labelName) {
+    relocs[relocCount].offset = offset;
+    strcpy(relocs[relocCount].opcode, opcode);
+    strcpy(relocs[relocCount].lab, labelName);
+    relocCount += 1;
+}
+
+static int checkReg(char *arg) {
+    if (!isNumber(arg)) {
+        exit(1);
+    }
+    int reg = atoi(arg);
+    if (reg < 0 || reg > 7) {
+        exit(1);
+    }
+    return reg;
+}
+
+static int checkOffset(int offset) {
+    if (offset < -32768 || offset > 32767) {
+        exit(1);
+    }
+    return offset;
 }
 
 int main(int argc, char **argv)
@@ -41,7 +115,7 @@ int main(int argc, char **argv)
             arg1[MAXLINELENGTH], arg2[MAXLINELENGTH];
 
     if (argc != 3) {
-        printf("error: usage: %s <assembly-code-file> <machine-code-file>\n",
+        printf("error: usage: %s <assembly-code-file> <object-code-file>\n",
             argv[0]);
         exit(1);
     }
@@ -56,18 +130,12 @@ int main(int argc, char **argv)
         printf("warning: assembly code file does not end with .as, .s, or .lc2k\n");
     }
 
-    if (!endsWith(outFileString, ".mc")) {
-        printf("error: machine code file must end with .mc\n");
-        exit(1);
-    }
-
     inFilePtr = fopen(inFileString, "r");
     if (inFilePtr == NULL) {
         printf("error in opening %s\n", inFileString);
         exit(1);
     }
 
-    // Check for blank lines in the middle of the code.
     checkForBlankLinesInCode(inFilePtr);
 
     outFilePtr = fopen(outFileString, "w");
@@ -76,236 +144,153 @@ int main(int argc, char **argv)
         exit(1);
     }
 
-    // Pass 1: to build a label table
-
-    int mem_count = 0; 
-
-    
-
-    
-    
-       
-
-    /* here is an example for how to use readAndParse to read a line from
-        inFilePtr */
-
     while (readAndParse(inFilePtr, label, opcode, arg0, arg1, arg2)) {
-        
+        int isData = !strcmp(opcode, ".fill");
+
         if (label[0] != '\0') {
-
-            for (int i = 0; i < labelCount; i++) {
-                if (!strcmp(LT[i].lab, label)) {
-                    exit(1); 
-                }
+            if (strlen(label) >= MAXLABEL || findLabel(label) >= 0) {
+                exit(1);
             }
-
             strcpy(LT[labelCount].lab, label);
-            LT[labelCount].address = mem_count; 
-            labelCount += 1; 
-
+            LT[labelCount].section = isData ? 'D' : 'T';
+            LT[labelCount].offset = isData ? dataCount : textCount;
+            labelCount += 1;
         }
 
-        mem_count += 1; 
+        if (isData) {
+            dataCount += 1;
+        } else {
+            textCount += 1;
+        }
     }
-    int count = 0; 
-    
 
-    /* this is how to rewind the file ptr so that you start reading from the
-        beginning of the file */
     rewind(inFilePtr);
 
+    int textIdx = 0;
+    int dataIdx = 0;
     while (readAndParse(inFilePtr, label, opcode, arg0, arg1, arg2)) {
         int machineCode = 0;
 
-        
         if (!strcmp(opcode, "add")) {
-            if (!isNumber(arg0) || !isNumber(arg1) || !isNumber(arg2)) {
-                exit(1);
-            }
-            int opp = 0; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            int regc = atoi(arg2); 
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7 || regc < 0 || regc > 7) {
-                exit(1);
-            }
-
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (regc);  
-            
+            int opp = 0;
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            int dest = checkReg(arg2);
+            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | dest;
         }
         else if (!strcmp(opcode, "nor")) {
-
-            if (!isNumber(arg0) || !isNumber(arg1) || !isNumber(arg2)) {
-                exit(1);
-            }
-
-            int opp = 1; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            int dregc = atoi(arg2); 
-
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7 || dregc < 0 || dregc > 7) {
-                exit(1);
-            }
-
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (dregc);  
-            
-            
+            int opp = 1;
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            int dest = checkReg(arg2);
+            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | dest;
         }
         else if (!strcmp(opcode, "lw")) {
-            int opp = 2; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            int offset = 0; 
-
-            if (!isNumber(arg0) || !isNumber(arg1)) {
-                exit(1);
-            }
-            
-            if (isNumber(arg2)) {
-                offset = atoi(arg2); 
-            }
-            else {
-                offset = findLabelAddress(arg2); 
-            }
-            if (offset < -32768 || offset > 32767) {
-                exit(1);
-            }
-
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF); 
-            
-            
-        }
-        else if (!strcmp(opcode, "sw")) {
-
-            int opp = 3; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            int offset = 0; 
-            if (!isNumber(arg0) || !isNumber(arg1)) {
-                exit(1);
-            }
-            
-            if (isNumber(arg2)) {
-                offset = atoi(arg2); 
-            }
-            else {
-                offset = findLabelAddress(arg2); 
-            }
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-            if (offset < -32768 || offset > 32767) {
-                exit(1);
-            }
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF); 
-        
-        }
-        else if (!strcmp(opcode, "beq")) {
-            if (!isNumber(arg0) || !isNumber(arg1)) {
-                exit(1);
-            }
-            int opp = 4; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            int target = 0; 
-            int offset = 0; 
-            
+            int opp = 2;
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            int offset;
             if (isNumber(arg2)) {
                 offset = atoi(arg2);
-            
+            } else {
+                offset = resolveLabel(arg2, 1);
+                addReloc(textIdx, "lw", arg2);
             }
-            else {
-                target = findLabelAddress(arg2); 
-                offset = target - (count + 1);
-            }
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-            if (offset < -32768 || offset > 32767) {
-                exit(1);
-            }
-        
+            checkOffset(offset);
             machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF);
         }
+        else if (!strcmp(opcode, "sw")) {
+            int opp = 3;
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            int offset;
+            if (isNumber(arg2)) {
+                offset = atoi(arg2);
+            } else {
+                offset = resolveLabel(arg2, 1);
+                addReloc(textIdx, "sw", arg2);
+            }
+            checkOffset(offset);
+            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF);
+        }
+        else if (!strcmp(opcode, "beq")) {
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            int offset;
+            if (isNumber(arg2)) {
+                offset = atoi(arg2);
+            } else {
+                offset = resolveLabel(arg2, 0) - (textIdx + 1);
+            }
+            checkOffset(offset);
+            machineCode = (4 << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF);
+        }
         else if (!strcmp(opcode, "jalr")) {
-            if (!isNumber(arg0) || !isNumber(arg1)) {
-                exit(1);
-            }
-            int opp = 5; 
-            int rega = atoi(arg0); 
-            int regb = atoi(arg1); 
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16); 
-
-
+            int rega = checkReg(arg0);
+            int regb = checkReg(arg1);
+            machineCode = (5 << 22) | (rega << 19) | (regb << 16);
         }
         else if (!strcmp(opcode, "halt")) {
-            int opp = 6;
-            machineCode = opp << 22;
+            machineCode = 6 << 22;
         }
         else if (!strcmp(opcode, "noop")) {
-            int opp = 7;
-            machineCode = opp << 22;
-        }
-        else if (!strcmp(opcode, ".fill")) {
-            
-            if (isNumber(arg0)) {
-                machineCode = atoi(arg0);
-            } 
-            else {
-                machineCode = findLabelAddress(arg0);  
-            }
-            
+            machineCode = 7 << 22;
         }
         else if (!strcmp(opcode, "b")) {
-            
-
-            int opp = 4; 
-            int rega = 0; 
-            int regb = 0; 
-            int offset = 0; 
-            
+            int offset;
             if (isNumber(arg0)) {
-                offset = atoi(arg0); 
+                offset = atoi(arg0);
+            } else {
+                offset = resolveLabel(arg0, 0) - (textIdx + 1);
             }
-            else {
-                offset = findLabelAddress(arg0) - (count + 1); 
-            }
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-            if (offset < -32768 || offset > 32767) {
-                exit(1);
-            }
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16) | (offset & 0xFFFF); 
+            checkOffset(offset);
+            machineCode = (4 << 22) | (offset & 0xFFFF);
         }
-        
         else if (!strcmp(opcode, "jump")) {
-            if (!isNumber(arg0)) {
-                exit(1);
+            int rega = checkReg(arg0);
+            machineCode = (5 << 22) | (rega << 19);
+        }
+        else if (!strcmp(opcode, ".fill")) {
+            if (isNumber(arg0)) {
+                machineCode = atoi(arg0);
+            } else {
+                machineCode = resolveLabel(arg0, 1);
+                addReloc(dataIdx, ".fill", arg0);
             }
-            int opp = 5; 
-            int rega = atoi(arg0); 
-            int regb = 0; 
-
-            if (rega < 0 || rega > 7 || regb < 0 || regb > 7) {
-                exit(1);
-            }
-
-            machineCode = (opp << 22) | (rega << 19) | (regb << 16); 
+            dataWords[dataIdx++] = machineCode;
+            continue;
         }
         else {
-            exit(1); 
+            exit(1);
         }
-        count += 1; 
-        printHexToFile(outFilePtr, machineCode);
-}
+        textWords[textIdx++] = machineCode;
+    }
+
+    for (int i = 0; i < labelCount; i++) {
+        if (isGlobal(LT[i].lab)) {
+            strcpy(symbols[symbolCount].lab, LT[i].lab);
+            symbols[symbolCount].section = LT[i].section;
+            symbols[symbolCount].offset = LT[i].offset;
+            symbolCount += 1;
+        }
+    }
+
+    fprintf(outFilePtr, "%d %d %d %d\n", textCount, dataCount, symbolCount, relocCount);
+    for (int i = 0; i < textCount; i++) {
+        printHexToFile(outFilePtr, textWords[i]);
+    }
+    for (int i = 0; i < dataCount; i++) {
+        printHexToFile(outFilePtr, dataWords[i]);
+    }
+    for (int i = 0; i < symbolCount; i++) {
+        fprintf(outFilePtr, "%s %c %d\n", symbols[i].lab, symbols[i].section, symbols[i].offset);
+    }
+    for (int i = 0; i < relocCount; i++) {
+        fprintf(outFilePtr, "%d %s %s\n", relocs[i].offset, relocs[i].opcode, relocs[i].lab);
+    }
+
+    fclose(outFilePtr);
+    fclose(inFilePtr);
     return(0);
 }
 

@@ -1,0 +1,2 @@
+        halt
+val     .fill foo
