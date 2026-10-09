@@ -1,2 +1,2 @@
-        nor -1 2 3
+        sw 0 1 missing
         halt

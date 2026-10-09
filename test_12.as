@@ -1,2 +1,3 @@
-        lw 0 1 foo
+dup     add 1 1 1
+dup     .fill 7
         halt

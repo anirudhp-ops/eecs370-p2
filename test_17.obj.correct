@@ -1,0 +1,16 @@
+4 3 3 5
+0x00810000
+0x00C10000
+0x00820005
+0x00830006
+0x00000000
+0x00000001
+0x00000002
+Ext U 0
+Stack U 0
+Foo D 2
+0 lw Ext
+1 sw Stack
+2 lw foo
+3 lw Foo
+0 .fill Ext

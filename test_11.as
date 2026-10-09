@@ -1,2 +1,2 @@
         halt
-val     .fill foo
+val     .fill nothere

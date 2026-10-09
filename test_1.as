@@ -1,2 +1,2 @@
-        mul 1 1 1
+        ADD 1 1 1
         halt

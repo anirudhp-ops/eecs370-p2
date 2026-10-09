@@ -1,2 +1,2 @@
-        lw a 1 5
+        beq 0 0 Missing
         halt
